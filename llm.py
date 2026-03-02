@@ -99,9 +99,9 @@ README 일부:
             return f"Error: Google API returned {data.get('error', 'unknown error')}"
 
 def get_llm_provider():
-    provider_type = os.environ.get("LLM_PROVIDER", "openai").lower()
-    model = os.environ.get("LLM_MODEL")
-    base_url = os.environ.get("LLM_BASE_URL")
+    provider_type = (os.environ.get("LLM_PROVIDER") or "openai").strip().lower()
+    model = (os.environ.get("LLM_MODEL") or "").strip() or None
+    base_url = (os.environ.get("LLM_BASE_URL") or "").strip() or None
 
     if provider_type == "openai":
         api_key = os.environ.get("OPENAI_KEY") or os.environ.get("LLM_KEY")
@@ -127,6 +127,6 @@ def get_llm_provider():
         api_key = os.environ.get("LLM_KEY") or os.environ.get("OPENAI_KEY")
         return OpenAIProvider(
             api_key=api_key,
-            base_url=base_url,
-            model=model
+            base_url=base_url or "https://api.openai.com/v1",
+            model=model or "gpt-4o-mini"
         )
