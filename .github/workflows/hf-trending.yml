@@ -43,6 +43,6 @@ jobs:
         run: |
           git config user.email "bot@github.com"
           git config user.name "GitHub Actions"
-          git add trending_cache.json
+          git add -f trending_cache.json
           git diff --staged --quiet || git commit -m "Update trending cache"
           git push
