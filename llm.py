@@ -6,8 +6,10 @@ class LLMProvider:
         raise NotImplementedError
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self, api_key):
+    def __init__(self, api_key, base_url="https://api.openai.com/v1", model="gpt-4o-mini"):
         self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
 
     def summarize(self, model_id, info, readme):
         prompt = f"""
@@ -20,18 +22,22 @@ README 일부:
 위 정보를 바탕으로 이 모델이 어떤 모델인지 한국어로 3줄 이내로 요약해줘.
 """
         res = requests.post(
-            "https://api.openai.com/v1/chat/completions",
+            f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},
-            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}]}
+            json={
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}]
+            }
         )
         data = res.json()
         if "choices" not in data:
-            return f"Error: OpenAI API returned {data.get('error', 'unknown error')}"
+            return f"Error: API returned {data.get('error', 'unknown error')}"
         return data["choices"][0]["message"]["content"]
 
 class AnthropicProvider(LLMProvider):
-    def __init__(self, api_key):
+    def __init__(self, api_key, model="claude-3-5-sonnet-20240620"):
         self.api_key = api_key
+        self.model = model
 
     def summarize(self, model_id, info, readme):
         prompt = f"""
@@ -51,7 +57,7 @@ README 일부:
                 "content-type": "application/json"
             },
             json={
-                "model": "claude-3-5-sonnet-20240620",
+                "model": self.model,
                 "max_tokens": 1024,
                 "messages": [{"role": "user", "content": prompt}]
             }
@@ -63,9 +69,27 @@ README 일부:
 
 def get_llm_provider():
     provider_type = os.environ.get("LLM_PROVIDER", "openai").lower()
+    model = os.environ.get("LLM_MODEL")
+    base_url = os.environ.get("LLM_BASE_URL")
+
     if provider_type == "openai":
-        return OpenAIProvider(os.environ.get("OPENAI_KEY"))
+        api_key = os.environ.get("OPENAI_KEY") or os.environ.get("LLM_KEY")
+        return OpenAIProvider(
+            api_key=api_key,
+            base_url=base_url or "https://api.openai.com/v1",
+            model=model or "gpt-4o-mini"
+        )
     elif provider_type == "anthropic":
-        return AnthropicProvider(os.environ.get("ANTHROPIC_KEY"))
+        api_key = os.environ.get("ANTHROPIC_KEY") or os.environ.get("LLM_KEY")
+        return AnthropicProvider(
+            api_key=api_key,
+            model=model or "claude-3-5-sonnet-20240620"
+        )
     else:
-        raise ValueError(f"지원하지 않는 LLM 프로바이더: {provider_type}")
+        # Generic OpenAI compatible provider as fallback for unknown types
+        api_key = os.environ.get("LLM_KEY") or os.environ.get("OPENAI_KEY")
+        return OpenAIProvider(
+            api_key=api_key,
+            base_url=base_url,
+            model=model
+        )
