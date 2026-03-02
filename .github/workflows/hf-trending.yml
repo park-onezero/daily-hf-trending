@@ -1,0 +1,40 @@
+name: HF Trending Monitor
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # 6시간마다 실행
+  workflow_dispatch: # 수동 실행도 가능
+
+permissions:
+  contents: write # access to check out code and install dependencies (required for pushing cache update)
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run monitor
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: python monitor.py
+
+      # 캐시 파일을 저장소에 commit해서 다음 실행 때 사용
+      - name: Save cache
+        run: |
+          git config user.email "bot@github.com"
+          git config user.name "GitHub Actions"
+          git add trending_cache.json
+          git diff --staged --quiet || git commit -m "Update trending cache"
+          git push
