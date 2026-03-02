@@ -26,8 +26,16 @@ jobs:
       - name: Run monitor
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          # LLM Configuration
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_KEY: ${{ secrets.LLM_KEY }}
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: python monitor.py
 
       # 캐시 파일을 저장소에 commit해서 다음 실행 때 사용
