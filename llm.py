@@ -98,6 +98,7 @@ def get_llm_provider():
     provider_type = (os.environ.get("LLM_PROVIDER") or "openai").strip().lower()
     model = (os.environ.get("LLM_MODEL") or "").strip() or None
     base_url = (os.environ.get("LLM_BASE_URL") or "").strip() or None
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
 
     if provider_type == "openai":
         api_key = os.environ.get("OPENAI_KEY") or os.environ.get("LLM_KEY")
@@ -113,7 +114,19 @@ def get_llm_provider():
             model=model or "claude-3-5-sonnet-20240620"
         )
     elif provider_type in ["google", "gemini"]:
-        api_key = os.environ.get("GEMINI_KEY") or os.environ.get("GOOGLE_API_KEY") or os.environ.get("LLM_KEY")
+        api_key = (
+            os.environ.get("GEMINI_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or openrouter_key
+            or os.environ.get("LLM_KEY")
+        )
+        if base_url:
+            # Allow using OpenRouter (OpenAI-compatible) while keeping google/gemini provider selection.
+            return OpenAIProvider(
+                api_key=api_key,
+                base_url=base_url,
+                model=model or "google/gemma-4-31b-it:free"
+            )
         return GoogleProvider(
             api_key=api_key,
             model=model or "gemini-1.5-flash"
