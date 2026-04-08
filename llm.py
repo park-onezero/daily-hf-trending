@@ -2,24 +2,100 @@ import requests
 import os
 
 class LLMProvider:
+    def _stringify(self, value):
+        if value in (None, "", [], {}):
+            return "미상"
+        if isinstance(value, list):
+            cleaned = [str(item).strip() for item in value if str(item).strip()]
+            return ", ".join(cleaned[:5]) if cleaned else "미상"
+        return str(value).strip() or "미상"
+
+    def _extract_tag_values(self, tags, prefix):
+        values = []
+        for tag in tags or []:
+            if isinstance(tag, str) and tag.startswith(prefix):
+                value = tag[len(prefix):].strip()
+                if value:
+                    values.append(value)
+        return values
+
+    def _collect_facts(self, info, readme):
+        tags = info.get("tags") or []
+        card_data = info.get("cardData") or {}
+        config = info.get("config") or {}
+
+        license_name = (
+            info.get("license")
+            or card_data.get("license")
+            or self._extract_tag_values(tags, "license:")
+        )
+        languages = (
+            card_data.get("language")
+            or self._extract_tag_values(tags, "language:")
+        )
+        base_models = (
+            card_data.get("base_model")
+            or self._extract_tag_values(tags, "base_model:")
+        )
+
+        interesting_tags = []
+        for tag in tags:
+            if not isinstance(tag, str):
+                continue
+            if ":" in tag:
+                continue
+            if tag in {"transformers", "safetensors", "endpoints_compatible"}:
+                continue
+            interesting_tags.append(tag)
+
+        file_traits = [
+            trait for trait in interesting_tags
+            if trait in {
+                "gguf", "gptq", "awq", "onnx", "mlx", "4-bit", "8-bit",
+                "text-generation-inference", "diffusers"
+            }
+        ]
+
+        facts = {
+            "태스크": info.get("pipeline_tag"),
+            "라이브러리": info.get("library_name"),
+            "라이선스": license_name,
+            "언어": languages,
+            "베이스 모델": base_models,
+            "아키텍처": config.get("architectures"),
+            "파일/배포 특성": file_traits,
+            "대표 태그": interesting_tags[:8],
+            "모델 카드 요약 원문": readme[:2000] if readme else "없음",
+        }
+        return "\n".join(
+            f"- {key}: {self._stringify(value)}" for key, value in facts.items()
+        )
+
     def _build_prompt(self, model_id, info, readme):
+        facts = self._collect_facts(info, readme)
         return f"""
-Hugging Face 트렌딩 모델 요약 요청입니다. 이 요약은 비전문가도 쉽게 이해할 수 있어야 합니다.
+Hugging Face 트렌딩 모델 Slack 알림용 요약 요청입니다.
+목표는 "이 모델이 왜 지금 볼 만한지"를 빠르게 파악하게 만드는 것입니다.
 
 모델 ID: {model_id}
-태스크: {info.get('pipeline_tag', '알 수 없음')}
-태그: {info.get('tags', [])}
-README (최초 2000자):
-{readme[:2000]}
+확인된 메타데이터:
+{facts}
 
 ---
 [요약 지침]
-- 위 정보를 바탕으로 이 모델이 **무엇을 하는 모델인지**, **어떤 상황에서 유용한지**, **일반 사용자가 어떤 이점을 얻을 수 있는지**를 중심으로 요약하세요.
-- 전문 용어(MoE, GGUF, 양자화, 파라미터 수 등)는 최대한 배제하거나, 필요하다면 쉽게 풀어서 설명하세요.
-- 반드시 3개의 항목으로 구성된 번호 리스트(1., 2., 3.) 형식을 사용하세요.
-- 각 항목은 한 문장으로 간결하고 친절하게 작성하세요.
-- "이 모델은...", "요약해 드립니다"와 같은 서론이나 결론은 완전히 생략하고 요약 내용만 출력하세요.
-- 마크다운 볼드(**) 등 불필요한 서식을 최소화하세요.
+- 반드시 아래 4개 라벨만 사용해 정확히 4줄로 출력하세요.
+  - 정체성:
+  - 핵심:
+  - 적합:
+  - 주의:
+- 각 줄은 한 문장만 쓰고, 90자 안팎으로 짧게 유지하세요.
+- 초보자용 일반론, 홍보 문구, 막연한 장점은 금지합니다.
+- "유용합니다", "빠릅니다", "정확합니다", "누구나 쉽게" 같은 표현은 근거가 있을 때만 쓰세요.
+- 태스크명을 풀어쓰는 수준의 설명만 반복하지 마세요.
+- 베이스 모델, 배포 포맷(GGUF/GPTQ/AWQ 등), 언어, 라이선스, 입력/출력 형태, 문서화된 특징이 있으면 우선 반영하세요.
+- 확인되지 않은 내용은 추측하지 말고 "README/메타데이터 기준 미상"처럼 명시하세요.
+- 상단 메타 정보(좋아요, 크기, 파라미터)를 반복하지 마세요.
+- 출력에는 서론, 결론, 번호 목록, 마크다운 볼드, 빈 줄을 넣지 마세요.
 """
 
     def summarize(self, model_id, info, readme):
