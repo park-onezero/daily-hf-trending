@@ -32,6 +32,8 @@ class OpenAIProvider(LLMProvider):
         self.model = model
 
     def summarize(self, model_id, info, readme):
+        if not self.api_key:
+            return "Error: Missing API key (set OPENROUTER_API_KEY or LLM_KEY/OPENAI_KEY)."
         prompt = self._build_prompt(model_id, info, readme)
         res = requests.post(
             f"{self.base_url}/chat/completions",
@@ -101,7 +103,7 @@ def get_llm_provider():
     openrouter_key = os.environ.get("OPENROUTER_API_KEY")
 
     if provider_type == "openai":
-        api_key = os.environ.get("OPENAI_KEY") or os.environ.get("LLM_KEY")
+        api_key = os.environ.get("OPENAI_KEY") or openrouter_key or os.environ.get("LLM_KEY")
         return OpenAIProvider(
             api_key=api_key,
             base_url=base_url or "https://api.openai.com/v1",
@@ -133,7 +135,7 @@ def get_llm_provider():
         )
     else:
         # Generic OpenAI compatible provider as fallback for unknown types
-        api_key = os.environ.get("LLM_KEY") or os.environ.get("OPENAI_KEY")
+        api_key = os.environ.get("LLM_KEY") or os.environ.get("OPENAI_KEY") or openrouter_key
         return OpenAIProvider(
             api_key=api_key,
             base_url=base_url or "https://api.openai.com/v1",

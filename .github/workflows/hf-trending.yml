@@ -31,7 +31,8 @@ jobs:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
-          LLM_KEY: ${{ secrets.LLM_KEY }}
+          LLM_KEY: ${{ secrets.LLM_KEY || secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
