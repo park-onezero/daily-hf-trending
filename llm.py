@@ -1,5 +1,11 @@
-import requests
 import os
+import time
+
+import requests
+
+TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+REQUEST_TIMEOUT_SECONDS = 30
+MAX_RETRIES = 2
 
 class LLMProvider:
     def _stringify(self, value):
@@ -105,6 +111,66 @@ Hugging Face 트렌딩 모델 Slack 알림용 요약 요청입니다.
 - 출력에는 서론, 결론, 번호 목록, 마크다운 볼드, 빈 줄을 넣지 마세요.
 """
 
+    def _request_json(self, provider_name, url, **kwargs):
+        last_error = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                res = requests.post(url, timeout=REQUEST_TIMEOUT_SECONDS, **kwargs)
+                if res.status_code in TRANSIENT_STATUS_CODES and attempt < MAX_RETRIES:
+                    time.sleep(2 ** attempt)
+                    continue
+                try:
+                    data = res.json()
+                except ValueError as exc:
+                    raise RuntimeError(f"{provider_name} returned non-JSON response ({res.status_code})") from exc
+                if res.status_code >= 400:
+                    raise RuntimeError(f"{provider_name} returned HTTP {res.status_code}: {self._summarize_api_error(data)}")
+                return data
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < MAX_RETRIES:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(f"{provider_name} request failed: {exc}") from exc
+        raise RuntimeError(f"{provider_name} request failed: {last_error}")
+
+    def _summarize_api_error(self, data):
+        if not isinstance(data, dict):
+            return "unknown error"
+        error = data.get("error") or data.get("message") or data
+        if isinstance(error, dict):
+            message = error.get("message") or error.get("code") or str(error)
+            metadata = error.get("metadata") or {}
+            provider_name = metadata.get("provider_name")
+            code = error.get("code")
+            parts = []
+            if provider_name:
+                parts.append(str(provider_name))
+            if code:
+                parts.append(str(code))
+            parts.append(str(message))
+            return " / ".join(parts)
+        return str(error)
+
+    def _fallback_summary(self, model_id, info, readme, reason):
+        task = self._stringify(info.get("pipeline_tag"))
+        library = self._stringify(info.get("library_name"))
+        license_name = self._stringify(
+            info.get("license") or (info.get("cardData") or {}).get("license")
+        )
+        architectures = self._stringify((info.get("config") or {}).get("architectures"))
+        tags = self._stringify((info.get("tags") or [])[:4])
+        reason_text = str(reason).replace("\n", " ").strip()
+        if len(reason_text) > 140:
+            reason_text = reason_text[:137] + "..."
+
+        return "\n".join([
+            f"정체성: 메타데이터 기준 {library} 라이브러리의 {task} 모델이며 아키텍처는 {architectures}입니다.",
+            f"핵심: LLM 요약 생성에 실패해 자동 폴백으로 태그와 모델 카드 일부만 반영했습니다.",
+            f"용도: 태스크와 대표 태그({tags}) 기준으로 후보 모델을 빠르게 선별하는 데 참고할 수 있습니다.",
+            f"주의: 라이선스는 {license_name}이며, 요약 실패 원인은 {reason_text or '미상'}입니다.",
+        ])
+
     def summarize(self, model_id, info, readme):
         raise NotImplementedError
 
@@ -116,20 +182,27 @@ class OpenAIProvider(LLMProvider):
 
     def summarize(self, model_id, info, readme):
         if not self.api_key:
-            return "Error: Missing API key (set OPENROUTER_API_KEY or LLM_KEY/OPENAI_KEY)."
+            return self._fallback_summary(
+                model_id, info, readme,
+                "Missing API key (set OPENROUTER_API_KEY or LLM_KEY/OPENAI_KEY)."
+            )
         prompt = self._build_prompt(model_id, info, readme)
-        res = requests.post(
-            f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}]
-            }
-        )
-        data = res.json()
-        if "choices" not in data:
-            return f"Error: API returned {data.get('error', 'unknown error')}"
-        return data["choices"][0]["message"]["content"]
+        try:
+            data = self._request_json(
+                "OpenAI-compatible API",
+                f"{self.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}]
+                }
+            )
+            if "choices" not in data:
+                raise RuntimeError(f"OpenAI-compatible API returned {self._summarize_api_error(data)}")
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, RuntimeError) as exc:
+            print(f"LLM summary fallback for {model_id}: {exc}")
+            return self._fallback_summary(model_id, info, readme, exc)
 
 class AnthropicProvider(LLMProvider):
     def __init__(self, api_key, model="claude-3-5-sonnet-20240620"):
@@ -137,24 +210,30 @@ class AnthropicProvider(LLMProvider):
         self.model = model
 
     def summarize(self, model_id, info, readme):
+        if not self.api_key:
+            return self._fallback_summary(model_id, info, readme, "Missing Anthropic API key.")
         prompt = self._build_prompt(model_id, info, readme)
-        res = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            },
-            json={
-                "model": self.model,
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": prompt}]
-            }
-        )
-        data = res.json()
-        if "content" not in data:
-            return f"Error: Anthropic API returned {data.get('error', 'unknown error')}"
-        return data["content"][0]["text"]
+        try:
+            data = self._request_json(
+                "Anthropic API",
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json={
+                    "model": self.model,
+                    "max_tokens": 1024,
+                    "messages": [{"role": "user", "content": prompt}]
+                }
+            )
+            if "content" not in data:
+                raise RuntimeError(f"Anthropic API returned {self._summarize_api_error(data)}")
+            return data["content"][0]["text"]
+        except (KeyError, IndexError, RuntimeError) as exc:
+            print(f"LLM summary fallback for {model_id}: {exc}")
+            return self._fallback_summary(model_id, info, readme, exc)
 
 class GoogleProvider(LLMProvider):
     def __init__(self, api_key, model="gemini-1.5-flash"):
@@ -162,22 +241,27 @@ class GoogleProvider(LLMProvider):
         self.model = model
 
     def summarize(self, model_id, info, readme):
+        if not self.api_key:
+            return self._fallback_summary(model_id, info, readme, "Missing Google API key.")
         prompt = self._build_prompt(model_id, info, readme)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
-        res = requests.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json={
-                "contents": [{
-                    "parts": [{"text": prompt}]
-                }]
-            }
-        )
-        data = res.json()
         try:
+            data = self._request_json(
+                "Google API",
+                url,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [{
+                        "parts": [{"text": prompt}]
+                    }]
+                }
+            )
+            if "candidates" not in data:
+                raise RuntimeError(f"Google API returned {self._summarize_api_error(data)}")
             return data["candidates"][0]["content"]["parts"][0]["text"]
-        except (KeyError, IndexError):
-            return f"Error: Google API returned {data.get('error', 'unknown error')}"
+        except (KeyError, IndexError, RuntimeError) as exc:
+            print(f"LLM summary fallback for {model_id}: {exc}")
+            return self._fallback_summary(model_id, info, readme, exc)
 
 def get_llm_provider():
     provider_type = (os.environ.get("LLM_PROVIDER") or "openai").strip().lower()

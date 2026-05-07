@@ -16,6 +16,10 @@ def format_bytes(size_bytes):
     return str(size_bytes)
 
 def notify_slack(model_id, summary, info):
+    if not SLACK_WEBHOOK:
+        print("Slack 알림 생략: SLACK_WEBHOOK이 설정되지 않았습니다.")
+        return
+
     likes = info.get("likes", 0)
     tag = info.get("pipeline_tag", "-")
     
@@ -27,4 +31,9 @@ def notify_slack(model_id, summary, info):
     storage_str = format_bytes(storage)
     
     msg = f"🆕 *신규 트렌딩 모델 감지*\n*{model_id}*\n태스크: {tag} | 좋아요: {likes} | 파라미터: {param_str} | 크기: {storage_str}\n\n{summary}\n🔗 https://huggingface.co/{model_id}"
-    requests.post(SLACK_WEBHOOK, json={"text": msg})
+    try:
+        res = requests.post(SLACK_WEBHOOK, json={"text": msg}, timeout=15)
+        if res.status_code >= 400:
+            print(f"Slack 알림 실패: HTTP {res.status_code} {res.text[:200]}")
+    except requests.RequestException as exc:
+        print(f"Slack 알림 실패: {exc}")
